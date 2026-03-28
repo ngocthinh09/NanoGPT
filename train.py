@@ -7,7 +7,7 @@ from data.loader import DataLoaderLite
 import time
 import math
 
-max_lr = 3e-4
+max_lr = 6e-4
 min_lr = max_lr * 0.1
 warmup_steps = 10
 max_steps = 100
@@ -45,7 +45,8 @@ if __name__ == "__main__":
     model.to(device)
     model = torch.compile(model)
     
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
+    optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr, device=device)
+    
     for step in range(max_steps):
         t0 = time.time()
         x, y = train_loader.next_batch()
