@@ -6,12 +6,6 @@ from model.transformer import GPT
 from data.loader import DataLoaderLite
 import time
 
-# 1. GPU
-# 2. torch.autocast
-# 3. torch.compile
-# 4. FlashAttention (calculate softmax online)
-# 5. Trick: size of matrix is power of 2 or multiple of 8, 16, 32, 64. 128
-
 if __name__ == "__main__":
     device = "cpu"
     if torch.cuda.is_available():
@@ -31,7 +25,7 @@ if __name__ == "__main__":
     model.to(device)
     model = torch.compile(model)
     
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
     for i in range(100):
         t0 = time.time()
         x, y = train_loader.next_batch()
@@ -40,9 +34,10 @@ if __name__ == "__main__":
         with torch.autocast(device_type=device, dtype=torch.bfloat16):
             logits, loss = model(x, y)
         loss.backward()
+        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         torch.cuda.synchronize() if torch.cuda.is_available() else None
         t1 = time.time()
         dt = (t1 - t0) * 1000
         tokens_per_sec = train_loader.B * train_loader.T / (t1 - t0)
-        print(f"Step {i}: loss {loss.item()}, time: {dt:.2f} ms, tokens/sec: {tokens_per_sec:.2f}")
+        print(f"Step {i}| Loss {loss.item()}| Grad Norm {norm.item():.2f}| Time: {dt:.2f} ms| Tokens/sec: {tokens_per_sec:.2f}")
