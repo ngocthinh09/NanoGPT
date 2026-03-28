@@ -1,30 +1,16 @@
 import torch
-import torch.nn as nn
-from torch.nn import functional as F
 from config import GPTConfig
 from model.transformer import GPT
 from data.loader import DataLoaderLite
+from utils.lr_scheduler import LRScheduler
 import time
-import math
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
 warmup_steps = 10
 max_steps = 100
 
-def get_lr(it):
-    # 1. Linear Warmup from 0 to max_lr for the first warmup_steps
-    if (it < warmup_steps):
-        return max_lr * (it + 1) / warmup_steps
-    # 2. If it > warmup_steps, then decay it with cosine decay down to min_lr over the course of max_steps
-    if (it > max_steps):
-        return min_lr
-    # 3. In between, use cosine decay from max_lr to min_lr
-    decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
-    assert 0 <= decay_ratio <= 1, "Decay ratio should be between 0 and 1"
-    coef = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-    return min_lr + coef * (max_lr - min_lr)
-
+lr_scheduler = LRScheduler(max_lr, min_lr, warmup_steps, max_steps)
 
 if __name__ == "__main__":
     device = "cpu"
@@ -66,7 +52,7 @@ if __name__ == "__main__":
             loss_accum += loss.detach()
             loss.backward()
         norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        lr = get_lr(step)
+        lr = lr_scheduler.get_lr(step)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         optimizer.step()
