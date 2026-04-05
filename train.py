@@ -26,12 +26,16 @@ lr_scheduler = LRScheduler(
 
 def save_checkpoint(step, val_loss, is_best: bool = False):
     os.makedirs("checkpoints", exist_ok=True)
+    raw_model = model.module if ddp else model
+    if hasattr(raw_model, '_orig_mod'):
+        raw_model = raw_model._orig_mod
+        
     checkpoint = {
         'step': step,
-        'model_state_dict': model.state_dict(),
+        'model_state_dict': raw_model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'val_loss': val_loss,
-        'config': original_model.config
+        'config': raw_model.config
     }
     torch.save(checkpoint, f'checkpoints/model_step_{step:06d}.pt')
     if is_best:
@@ -62,6 +66,21 @@ if __name__ == "__main__":
 
     enc = tiktoken.get_encoding("gpt2")
     
+    checkpoint = None
+    model_config = None
+    if args.resume is not None:
+        try:
+            if master_process:
+                logger.info(f"Resuming from checkpoint: {args.resume}")
+            torch.serialization.add_safe_globals([GPTConfig])
+            checkpoint = torch.load(args.resume, map_location=device)
+            model_config = checkpoint['config']
+        except Exception as e:
+            raise ValueError(f"Failed to load checkpoint from {args.resume}: {e}")
+    
+    if not model_config:
+        model_config = get_model_config(args.model_type, vocab_size=50304)
+    
     total_batch_size = training_config.total_batch_size
     B = training_config.B
     T = training_config.T
@@ -74,8 +93,17 @@ if __name__ == "__main__":
     train_loader = DataLoaderLite(B, T, ddp_rank, ddp_world_size, split='train')
     val_loader = DataLoaderLite(B, T, ddp_rank, ddp_world_size, split='val')
 
-    model_config = get_model_config(args.model_type, vocab_size=50304)
     model = GPT(model_config).to(device)
+    if checkpoint:
+        model.load_state_dict(checkpoint['model_state_dict'])
+        start_step = checkpoint['step'] + 1
+        best_val_loss = checkpoint.get('val_loss', float('inf'))
+        if master_process:
+            logger.info(f"Resumed from step {checkpoint['step']} with validation loss {best_val_loss:.4f}")
+    else:
+        start_step = 0
+        best_val_loss = float('inf')
+    
     if args.use_torch_compile:
         if master_process: logger.info("Because using torch.compile, sampling will be skipped during training.")
         model = torch.compile(model)
@@ -83,33 +111,12 @@ if __name__ == "__main__":
         model = DDP(model, device_ids=[ddp_local_rank])
     original_model = model.module if ddp else model
     
-    start_step = 0
-    best_val_loss = float('inf')
     optimizer = original_model.configure_optimizers(
         weight_decay=lr_scheduler_config.weigh_decay,
         learning_rate=lr_scheduler_config.max_lr,
         master_process=master_process,
         device_type=device_type
     )
-    
-    if args.resume is not None:
-        try:
-            if master_process:
-                logger.info(f"Resuming from checkpoint: {args.resume}")
-            torch.serialization.add_safe_globals([GPTConfig])
-            checkpoint = torch.load(args.resume, map_location=device)
-            ckpt_config = checkpoint['config']
-            if (ckpt_config.n_layer != model_config.n_layer or ckpt_config.n_head != model_config.n_head or ckpt_config.n_embd != model_config.n_embd):
-                raise ValueError(f"Checkpoint model config does not match current model config. Checkpoint config: {ckpt_config}, Current config: {model_config}")
-                import sys; sys.exit(1)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            start_step = checkpoint['step'] + 1
-            best_val_loss = checkpoint.get('val_loss', float('inf'))
-            if master_process:
-                logger.info(f"Resumed from step {checkpoint['step']} with validation loss {best_val_loss:.4f}")
-        except Exception as e:
-            raise ValueError(f"Failed to load checkpoint from {args.resume}: {e}")
     
     for step in range(start_step, training_config.max_steps):
         t0 = time.time()
