@@ -82,5 +82,13 @@ torchrun --nproc_per_node=2 train.py --model_type gpt2 --use_torch_compile
 > python train.py --resume checkpoints/model_best.pt
 > ```
 
+#### 4. Inference
+To generate text using a trained checkpoint:
+```
+python sample.py --checkpoint checkpoints/model_best.pt
+```
+>You can customize the sampling parameters (e.g., `max_new_tokens`, `temperature`, `top_k`) by modifying the `SamplingConfig` dataclass in `config.py`.
+
+
 ## License
 This project is licensed under the MIT License.
