@@ -9,8 +9,7 @@ from utils.distributed import ddp_setup, ddp_cleanup
 from utils.logger import get_logger
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
-import logging
-import time
+import logging, time, os
 
 sampling_config = SamplingConfig()
 lr_scheduler_config = LRSchedulerConfig()
@@ -87,6 +86,16 @@ if __name__ == "__main__":
                     dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
                 if master_process:
                     logger.info(f"Validation Loss: {val_loss_accum.item():.4f}")
+                    if step > 0 and (step % 30 == 0 or step == training_config.max_steps - 1):
+                        os.makedirs("checkpoints", exist_ok=True)
+                        checkpoint_path = os.path.join("checkpoints", f"model_step_{step}.pt")
+                        checkpoint = {
+                            'model': original_model.state_dict(),
+                            'config': original_model.config,
+                            'step': step,
+                            'val_loss': val_loss_accum.item()
+                        }
+                        torch.save(checkpoint, checkpoint_path)
 
         # Sampling from the model
         if step > 0 and step % 15 == 0 and not training_config.use_torch_compile and master_process:
