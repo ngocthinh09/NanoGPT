@@ -1,5 +1,7 @@
+import tiktoken
 import torch
-from config import GPTConfig, LRSchedulerConfig, TrainingConfig
+import torch.nn.functional as F
+from config import GPTConfig, LRSchedulerConfig, TrainingConfig, SamplingConfig
 from model.transformer import GPT
 from data.loader import DataLoaderLite
 from utils.lr_scheduler import LRScheduler
@@ -8,6 +10,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 import time
 
+sampling_config = SamplingConfig()
 lr_scheduler_config = LRSchedulerConfig()
 training_config = TrainingConfig()
 lr_scheduler = LRScheduler(
@@ -26,6 +29,8 @@ if __name__ == "__main__":
     torch.manual_seed(1337)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(1337)
+
+    enc = tiktoken.get_encoding("gpt2")
     
     total_batch_size = training_config.total_batch_size
     B = training_config.B
@@ -56,6 +61,7 @@ if __name__ == "__main__":
     for step in range(training_config.max_steps):
         t0 = time.time()
         
+        # Calculate validation loss
         if step % 15 == 0:
             model.eval()
             val_loader.reset()
@@ -73,7 +79,29 @@ if __name__ == "__main__":
                     dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
                 if master_process:
                     print(f"Validation Loss: {val_loss_accum.item():.4f}")
-                
+
+        # Sampling from the model
+        if step > 0 and step % 15 == 0 and not training_config.use_torch_compile and master_process:
+            model.eval()
+            tokens = enc.encode(sampling_config.prompt)
+            tokens = torch.tensor(tokens, dtype=torch.long).unsqueeze(0).repeat(sampling_config.num_return_sequences, 1)
+            xgen = tokens.to(device)
+            sample_rng = torch.Generator(device=device).manual_seed(1337)
+            while xgen.size(1) < sampling_config.max_length:
+                with torch.no_grad():
+                    logits, loss = model(xgen)
+                    logits = logits[:, -1, :] / sampling_config.temperature
+                    probs = F.softmax(logits, dim=-1)
+                    topk_probs, topk_indices = torch.topk(probs, k=20, dim=-1)
+                    ix = torch.multinomial(topk_probs, num_samples=1, generator=sample_rng)
+                    xcol = torch.gather(topk_indices, dim=-1, index=ix)
+                    xgen = torch.cat((xgen, xcol), dim=1)
+                    
+            for i in range(sampling_config.num_return_sequences):
+                tokens = xgen[i, :sampling_config.max_length].tolist()
+                decoded = enc.decode(tokens)
+                print(f"\n=== Sample {i+1} ===\n{decoded}\n")
+            
         model.train()
         optimizer.zero_grad()
         loss_accum = 0.0

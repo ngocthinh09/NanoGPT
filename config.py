@@ -22,3 +22,11 @@ class TrainingConfig:
     use_torch_compile: bool = False     # whether to use torch.compile for the model
     warmup_steps: int = 21              # number of steps to warm up the learning rate
     max_steps: int = 381                # total number of training steps
+
+@dataclass
+class SamplingConfig:
+    temperature: float = 0.7            # sampling temperature
+    num_return_sequences: int = 4       # number of sequences to generate
+    max_length: int = 32                # maximum length of generated sequences
+    prompt: str = "Once upon a time"    # initial prompt for generation
+    
